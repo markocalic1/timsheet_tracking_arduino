@@ -5,13 +5,9 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <ESP8266WiFiMulti.h>
 
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
-
-ESP8266WiFiMulti WiFiMulti;
-
 
 #define STASSID "NAVADOO"
 #define STAPSK  "NAVADOMRATA23"
@@ -19,26 +15,26 @@ ESP8266WiFiMulti WiFiMulti;
 //// define pins for RFID
 #define CS_RFID 4
 #define RST_RFID 5
+
 // Instance of the class for RFID
 MFRC522 rfid(CS_RFID, RST_RFID);
+
+#define TRACK_TIME true
+int lastMilisec = 0;
 
 String uidString;
 
 // Pins for LEDs and buzzer
-//const int redLED = 6;
-//const int greenLED = 7;
-//const int buzzer = 5;
+const int redLED = 16; //D0
+const int greenLED =10; //SD3
+const int buzzer = 15; //D8
 
 
-
-const char* sessionURL= "https://test.nava.hr/web/session/authenticate";
-const char* apiURL = "http://test.nava.hr/api/attendance";
+const char *host = "test.nava.hr";
+const char* sessionURL= "/web/session/authenticate";
+const char* apiURL = "/api/attendance";
 
 String session_id;
-
-//Link to read data from https://jsonplaceholder.typicode.com/comments?postId=7
-//Web/Server address to read/write from
-const char *host = "test.nava.hr";
 
 const int httpsPort = 443;  //HTTPS= 443 and HTTP = 80
 
@@ -50,42 +46,42 @@ const char fingerprint[] PROGMEM = "66 6B CC 89 FF E9 6C 92 79 3D 2C DC BE 92 38
 
 
 void setup() {
-//
-//  // Set LEDs and buzzer as outputs
-//  pinMode(redLED, OUTPUT);
-//  pinMode(greenLED, OUTPUT);
-//  pinMode(buzzer, OUTPUT);
+  // Set LEDs and buzzer as outputs
+  pinMode(redLED, OUTPUT);
+  pinMode(greenLED, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+  
   Serial.begin(115200);
   while(!Serial);
-    // Init SPI bus
+   // Init SPI bus
   SPI.begin(); 
   // Init MFRC522 
   rfid.PCD_Init();
 
- Serial.println();
-  Serial.println();
-  Serial.println();
+  logMessage("");
+  logMessage("");
+  logMessage("");
 
-delay(1000);
-  Serial.begin(115200);
   WiFi.mode(WIFI_OFF);        //Prevents reconnection issue (taking too long to connect)
-  delay(1000);
+  delay(500);
   WiFi.mode(WIFI_STA);        //Only Station No AP, This line hides the viewing of ESP as wifi hotspot
   
   WiFi.begin(STASSID, STAPSK);     //Connect to your WiFi router
-  Serial.println("");
+  logMessage("");
 
   Serial.print("Connecting");
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    blinkLed(greenLED,1);
+    blinkLed(redLED,1);
   }
 
   //If connection successful show IP address in serial monitor
-  Serial.println("");
+  logMessage("");
   Serial.print("Connected to ");
-  Serial.println(STASSID);
+  logMessage(STASSID);
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());  //IP address assigned to your ESP
 
@@ -93,13 +89,17 @@ delay(1000);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (session_id.length() >10){
+      digitalWrite(greenLED, HIGH);
+
+    }
   //look for new cards
   if(rfid.PICC_IsNewCardPresent()) {
+    digitalWrite(greenLED, LOW);
     readRFID();
     WiFiClientSecure httpsClient;    //Declare object of class WiFiClient
   
-    Serial.println(host);
+    logMessage(host);
   
     Serial.printf("Using fingerprint '%s'\n", fingerprint);
     httpsClient.setFingerprint(fingerprint);
@@ -113,62 +113,74 @@ void loop() {
         Serial.print(".");
         r++;
     }
+    
     if(r==30) {
-      Serial.println("Connection failed");
+      logMessage("Connection failed");
+      digitalWrite(redLED, HIGH);
+
     }
     else {
-      Serial.println("Connected to web");
+      logMessage("Connected to web");
+      digitalWrite(redLED, LOW);
+
     }
-    
-    String getData, Link;
-    
-    //POST Data
-    Link = "/web/session/authenticate";
-
-    Serial.print("requesting URL: ");
-    Serial.println(host);
-
 
     Serial.print("UID:");
-    Serial.println(uidString);
+    logMessage(uidString);
 
-    Link= "/api/attendance";
-    String body ="{\"jsonrpc\": \"2.0\",\"params\":{\"rfid\":\""+ uidString + "\",\"time\": \"2020-02-02 20:23:23\"}}";  // a valid jsonObject
-    String request = String("POST ") +Link + " HTTP/1.1\r\n" +
+    String body ="{\"jsonrpc\": \"2.0\",\"params\":{\"rfid\":\""+ uidString + "\"}}";  // a valid jsonObject
+    String request = String("POST ") + apiURL + " HTTP/1.1\r\n" +
                "Host: " + host + "\r\n" +
                "Content-Type: application/json"+ "\r\n" +
               "X-Openerp-Session-Id: "+ session_id +"\r\n" +
                "Content-Length: " + String(body.length()) + "\r\n\r\n" +
                body+ "\r\n";
-    Serial.println(request);
-    httpsClient.print(String("POST ") + Link + " HTTP/1.1\r\n" +
-               "Host: " + host + "\r\n" +
-               "Content-Type: application/json"+ "\r\n" +
-               "X-Openerp-Session-Id: "+ session_id +"\r\n" +
-               "Content-Length: " + String(body.length()) + "\r\n\r\n" +
-               body+ "\r\n" 
-               );
+    logMessage(request);
+    httpsClient.print(request);
   
-    Serial.println("request sent");
+    logMessage("request sent");
                     
     while (httpsClient.connected()) {
       String line = httpsClient.readStringUntil('\n');
       if (line == "\r") {
-        Serial.println("headers received");
+        logMessage("headers received");
         break;
       }
     }
   
-    Serial.println("reply was:");
-    Serial.println("==========");
-    String line;
-    while(httpsClient.available()){        
-      line = httpsClient.readStringUntil('\n');  //Read Line by Line
-      Serial.println(line); //Print response
+    logMessage("reply was:");
+    logMessage("==========");
+    String response;
+    String result = "nok";
+    response = httpsClient.readStringUntil('}');//Read
+
+    logMessage(response);
+    if (response.startsWith("{\"jsonrpc\": \"2.0\"")) {
+      DynamicJsonDocument doc(1024);
+      deserializeJson(doc, response);
+      
+      result = String(doc["result"]);
+      logMessage(result);
+      logMessage("==========");
+      logMessage("closing connection");
     }
-    Serial.println("==========");
-    Serial.println("closing connection");
-    
+
+    if(result == "ok"){
+        logMessage("Result ok:Blink green 2 times ");
+
+        beepSuccess();
+
+        blinkLed(greenLED,3);
+
+    }
+    else{
+        logMessage("Result nok:Blink red 3 times ");
+        beepError();
+        beepError();
+        beepError();
+              blinkLed(redLED,3);
+
+    }
 
   }
 
@@ -178,12 +190,14 @@ void loop() {
 
 String getSessionId(){
    WiFiClientSecure httpsClient;    //Declare object of class WiFiClient
+
+     digitalWrite(greenLED, HIGH);   // sets the LED on
   
-    Serial.println(host);
+    logMessage(host);
   
     Serial.printf("Using fingerprint '%s'\n", fingerprint);
     httpsClient.setFingerprint(fingerprint);
-    httpsClient.setTimeout(15000); // 15 Seconds
+    httpsClient.setTimeout(5000); // 5 Seconds
     delay(1000);
     
     Serial.print("HTTPS Connecting");
@@ -194,54 +208,78 @@ String getSessionId(){
         r++;
     }
     if(r==30) {
-      Serial.println("Connection failed");
+      logMessage("Connection failed");
     }
     else {
-      Serial.println("Connected to web");
+      logMessage("Connected to web");
     }
     
-    String getData, Link;
     
-    //POST Data
-    Link = "/web/session/authenticate";
+
 
     Serial.print("requesting URL: ");
-    Serial.println(host);
+    logMessage(host);
 
 //    request for session_id
     const char *body ="{\"jsonrpc\": \"2.0\",\"params\":{\"db\":\"TIMETRACKER\",\"login\": \"admin\",\"password\": \"odoo\"}}";  // a valid jsonObject
     
-    httpsClient.print(String("POST ") + Link + " HTTP/1.1\r\n" +
+    httpsClient.print(String("POST ") + sessionURL + " HTTP/1.1\r\n" +
                  "Host: " + host + "\r\n" +
                  "Content-Type: application/json"+ "\r\n" +
                  "Content-Length: " + strlen(body) + "\r\n\r\n" +
                  body + "\r\n" +
                  "\r\n\r\n");
   
-    Serial.println("request sent");
+    logMessage("request sent");
                     
     while (httpsClient.connected()) {
       String line = httpsClient.readStringUntil('\n');
       if (line == "\r") {
-        Serial.println("headers received");
+        logMessage("headers received");
         break;
       }
     }
   
-    Serial.println("reply was:");
-    Serial.println("==========");
-    String line;
-//    while(httpsClient.available()){ 
-//      line      
-      line = httpsClient.readString();  //Read Line by Line
-      DynamicJsonDocument doc(2048);
-     deserializeJson(doc, line);
+    logMessage("reply was:");
+    logMessage("==========");
+    String response;
+    response = httpsClient.readStringUntil('\n');//Read
+    logMessage(response);
+
+//    response = httpsClient.readStringUntil('}');//Read
+//    logMessage(response);
+//
+//    response=httpsClient.readStringUntil('"session_id"');
+//    logMessage(response);
+//        response=httpsClient.readStringUntil('\n');
+//        logMessage(response);
+
+
     
-      String session_id = doc["result"]["session_id"];
-      Serial.println(session_id);
-//    }
+    
+
+//
+//    response.trim(); 
+//    logMessage(response);
+   if(response) {
+
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, response);
+
+    session_id = String(doc["result"]["session_id"]);
+    logMessage("Session_id:");
+    logMessage(session_id);
   
-  return session_id;
+    beepSuccess();
+    blinkLed(greenLED,3);
+
+
+  delay(100);
+   }
+   else{
+    logMessage("Session not parsed.");
+    }       
+    return session_id;
 }
 
 
@@ -250,12 +288,42 @@ void readRFID() {
   Serial.print("Tag UID: ");
   uidString = String(rfid.uid.uidByte[0]) + " " + String(rfid.uid.uidByte[1]) + " " + 
     String(rfid.uid.uidByte[2]) + " " + String(rfid.uid.uidByte[3]);
-  Serial.println(uidString);
+  logMessage(uidString);
  
-  // Sound the buzzer when a card is read
-//  tone(buzzer, 2000); 
-  delay(100);        
-//  noTone(buzzer);
-//  
+beepSuccess();
+//  delay(100);
+}
+
+void logMessage(String message){
+  int currMilisec = millis();
+  int difference = currMilisec - lastMilisec;
+  if (TRACK_TIME){
+    message = message + " " + difference + " ms";
+    lastMilisec = currMilisec;
+    }
+   Serial.println(message);
+}
+
+void beepError(){
+      // Sound the buzzer when a card is read
+  tone(buzzer, 30, 5000);
   delay(100);
+  noTone(buzzer);
+//   
+}
+void beepSuccess(){
+      // Sound the buzzer when a card is read
+  tone(buzzer, 800, 1000);
+  delay(100);
+  noTone(buzzer);
+  delay(100);   
+}
+
+void blinkLed(int pin, int times){
+    for (int i=0;i<=times;i++){ 
+      digitalWrite(pin, HIGH);    // sets the LED on
+      delay(100);
+      digitalWrite(pin, LOW);    // sets the LED off
+      delay(100);
+    }
 }
