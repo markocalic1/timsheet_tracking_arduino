@@ -1,5 +1,3 @@
-
-
 #include <MFRC522.h> // for the RFID
 #include <SPI.h> // for the RFID and SD card module
 
@@ -8,16 +6,16 @@
 
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+
 
 #define STASSID "NAVADOO"
 #define STAPSK  "NAVADOMRATA23"
 
-//// define pins for RFID
-#define CS_RFID 4
-#define RST_RFID 5
-
-// Instance of the class for RFID
-MFRC522 rfid(CS_RFID, RST_RFID);
 
 #define TRACK_TIME true
 int lastMilisec = 0;
@@ -27,8 +25,12 @@ String uidString;
 // Pins for LEDs and buzzer
 const int redLED = 16; //D0
 const int greenLED =10; //SD3
-const int buzzer = 15; //D8
+//// define pins for RFID
+#define CS_RFID 2 //D3
+#define RST_RFID 0 //D4
 
+// Instance of the class for RFID
+MFRC522 rfid(CS_RFID, RST_RFID);
 
 const char *host = "test.nava.hr";
 const char* sessionURL= "/web/session/authenticate";
@@ -46,26 +48,25 @@ const char fingerprint[] PROGMEM = "66 6B CC 89 FF E9 6C 92 79 3D 2C DC BE 92 38
 
 
 void setup() {
-  // Set LEDs and buzzer as outputs
-  pinMode(redLED, OUTPUT);
-  pinMode(greenLED, OUTPUT);
-  pinMode(buzzer, OUTPUT);
-  
+  initializeLEDs();
+  initializeBuzzer();
+
+   Wire.begin();
   Serial.begin(115200);
   while(!Serial);
    // Init SPI bus
   SPI.begin(); 
-  // Init MFRC522 
-  rfid.PCD_Init();
+  initializeRFID();
 
   logMessage("");
   logMessage("");
   logMessage("");
-
+  initializeLCD();
   WiFi.mode(WIFI_OFF);        //Prevents reconnection issue (taking too long to connect)
   delay(500);
   WiFi.mode(WIFI_STA);        //Only Station No AP, This line hides the viewing of ESP as wifi hotspot
-  
+
+  drawchar("Connectiing to Wifi");
   WiFi.begin(STASSID, STAPSK);     //Connect to your WiFi router
   logMessage("");
 
@@ -74,6 +75,7 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+     drawchar(".");
     blinkLed(greenLED,1);
     blinkLed(redLED,1);
   }
@@ -82,6 +84,7 @@ void setup() {
   logMessage("");
   Serial.print("Connected to ");
   logMessage(STASSID);
+   drawchar(String("Connected to ") + String(STASSID));
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());  //IP address assigned to your ESP
 
@@ -91,6 +94,7 @@ void setup() {
 void loop() {
   if (session_id.length() >10){
       digitalWrite(greenLED, HIGH);
+           drawchar("READY");
 
     }
   //look for new cards
@@ -98,7 +102,7 @@ void loop() {
     digitalWrite(greenLED, LOW);
     readRFID();
     WiFiClientSecure httpsClient;    //Declare object of class WiFiClient
-  
+    drawchar("CHECKING YOUR CARD");
     logMessage(host);
   
     Serial.printf("Using fingerprint '%s'\n", fingerprint);
@@ -117,6 +121,7 @@ void loop() {
     if(r==30) {
       logMessage("Connection failed");
       digitalWrite(redLED, HIGH);
+         drawchar("PROBLEM WITH CONNECTION TO INTERNET");
 
     }
     else {
@@ -151,7 +156,9 @@ void loop() {
     logMessage("reply was:");
     logMessage("==========");
     String response;
-    String result = "nok";
+    String employee;
+    String action;
+    String response_status = "nok";
     response = httpsClient.readStringUntil('}');//Read
 
     logMessage(response);
@@ -159,19 +166,24 @@ void loop() {
       DynamicJsonDocument doc(1024);
       deserializeJson(doc, response);
       
-      result = String(doc["result"]);
-      logMessage(result);
+      response_status = String(doc["result"]["status"]);
+      employee = String(doc["result"]["employee"]);
+      action = String(doc["result"]["action"]);
+      logMessage(response_status);
+      logMessage(employee);
+      logMessage(action); 
       logMessage("==========");
       logMessage("closing connection");
     }
 
-    if(result == "ok"){
+    if(response_status == "ok"){
         logMessage("Result ok:Blink green 2 times ");
 
         beepSuccess();
 
         blinkLed(greenLED,3);
-
+         drawchar(String("STATUS : OK \n Zaposlenik: ") + employee + " \nAkcija: " + action);
+        delay(2000);
     }
     else{
         logMessage("Result nok:Blink red 3 times ");
@@ -191,7 +203,6 @@ void loop() {
 String getSessionId(){
    WiFiClientSecure httpsClient;    //Declare object of class WiFiClient
 
-     digitalWrite(greenLED, HIGH);   // sets the LED on
   
     logMessage(host);
   
@@ -246,22 +257,7 @@ String getSessionId(){
     response = httpsClient.readStringUntil('\n');//Read
     logMessage(response);
 
-//    response = httpsClient.readStringUntil('}');//Read
-//    logMessage(response);
-//
-//    response=httpsClient.readStringUntil('"session_id"');
-//    logMessage(response);
-//        response=httpsClient.readStringUntil('\n');
-//        logMessage(response);
-
-
-    
-    
-
-//
-//    response.trim(); 
-//    logMessage(response);
-   if(response) {
+    if(response) {
 
     DynamicJsonDocument doc(2048);
     deserializeJson(doc, response);
@@ -283,16 +279,6 @@ String getSessionId(){
 }
 
 
-void readRFID() {
-  rfid.PICC_ReadCardSerial();
-  Serial.print("Tag UID: ");
-  uidString = String(rfid.uid.uidByte[0]) + " " + String(rfid.uid.uidByte[1]) + " " + 
-    String(rfid.uid.uidByte[2]) + " " + String(rfid.uid.uidByte[3]);
-  logMessage(uidString);
- 
-beepSuccess();
-//  delay(100);
-}
 
 void logMessage(String message){
   int currMilisec = millis();
@@ -302,28 +288,4 @@ void logMessage(String message){
     lastMilisec = currMilisec;
     }
    Serial.println(message);
-}
-
-void beepError(){
-      // Sound the buzzer when a card is read
-  tone(buzzer, 30, 5000);
-  delay(100);
-  noTone(buzzer);
-//   
-}
-void beepSuccess(){
-      // Sound the buzzer when a card is read
-  tone(buzzer, 800, 1000);
-  delay(100);
-  noTone(buzzer);
-  delay(100);   
-}
-
-void blinkLed(int pin, int times){
-    for (int i=0;i<=times;i++){ 
-      digitalWrite(pin, HIGH);    // sets the LED on
-      delay(100);
-      digitalWrite(pin, LOW);    // sets the LED off
-      delay(100);
-    }
 }
